@@ -23,8 +23,7 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 COPY --from=source /app ./
 RUN yarn config set registry 'https://registry.npmmirror.com/' \
-
-RUN yarn install
+ && yarn install
 
 # ── 构建 ─────────────────────────────────────────────────────
 FROM base AS builder
