@@ -43,8 +43,8 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
-RUN mkdir -p /app/app/mcp && chmod 777 /app/app/mcp \
- && cp /app/app/mcp/mcp_config.default.json /app/app/mcp/mcp_config.json
+RUN mkdir -p /app/app/mcp && chmod 777 /app/app/mcp
+COPY --from=builder /app/app/mcp/mcp_config.default.json /app/app/mcp/mcp_config.json
 
 EXPOSE 3000
 CMD ["node", "server.js"]
