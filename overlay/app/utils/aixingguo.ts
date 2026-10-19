@@ -117,7 +117,36 @@ export async function listKeys(
   });
 }
 
-async function modelsForKey(key: string, keyId: number): Promise<string[]> {
+/** 广场缓存：group_id → 该分组在售的模型名（这是「已定价、可卖」的口径） */
+const plazaCache = new Map<number, { models: string[]; exp: number }>();
+
+async function modelsForGroup(groupId?: number): Promise<string[] | undefined> {
+  if (!groupId) return undefined;
+  const hit = plazaCache.get(groupId);
+  if (hit && hit.exp > Date.now()) return hit.models;
+  const plaza = await fetchJson(`${PANEL_URL}/api/v1/model-plaza`, "");
+  const groups = plaza?.data?.groups;
+  if (!Array.isArray(groups)) return undefined;
+  for (const g of groups) {
+    if (g && g.id === groupId) {
+      const models: string[] = (g.models ?? []).map((m: any) => m?.name).filter(Boolean);
+      plazaCache.set(groupId, { models, exp: Date.now() + MODELS_TTL });
+      return models;
+    }
+  }
+  return undefined;
+}
+
+async function modelsForKey(
+  key: string,
+  keyId: number,
+  groupId?: number,
+): Promise<string[]> {
+  // 优先用「广场里该分组在售的模型」——这才是已定价、可卖的清单；
+  // 退回到上游 /v1/models 会把账号支持但未定价的模型（甚至生图模型）也列出来。
+  const byGroup = await modelsForGroup(groupId);
+  if (byGroup && byGroup.length) return byGroup;
+
   const hit = modelsCache.get(keyId);
   if (hit && hit.exp > Date.now()) return hit.models;
   const m = await fetchJson(`${PANEL_URL}/v1/models`, key);
@@ -146,6 +175,10 @@ export async function resolveSession(
     keyName: chosen.name || `密钥 ${chosen.id}`,
     keyId: chosen.id,
     groupId: chosen.group_id ?? chosen.group?.id,
-    models: await modelsForKey(chosen.key, chosen.id),
+    models: await modelsForKey(
+      chosen.key,
+      chosen.id,
+      chosen.group_id ?? chosen.group?.id,
+    ),
   };
 }
