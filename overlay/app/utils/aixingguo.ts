@@ -61,10 +61,9 @@ const modelsCache = new Map<number, { models: string[]; exp: number }>();
 
 async function fetchJson(url: string, token: string): Promise<any | undefined> {
   try {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      cache: "no-store",
-    });
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(url, { headers, cache: "no-store" });
     if (!res.ok) return undefined;
     return await res.json();
   } catch {
