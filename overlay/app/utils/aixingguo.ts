@@ -33,7 +33,12 @@ type RawKey = {
   key: string;
   name: string;
   group_id?: number;
-  group?: { id?: number; name?: string; rate_multiplier?: number };
+  group?: {
+    id?: number;
+    name?: string;
+    rate_multiplier?: number;
+    status?: string;
+  };
   status?: string;
   expires_at?: string | null;
   quota?: number;
@@ -83,6 +88,8 @@ async function rawKeys(token: string): Promise<RawKey[]> {
 
 function usability(k: RawKey): { usable: boolean; reason?: string } {
   if (k.status && k.status !== "active") return { usable: false, reason: "已禁用" };
+  if (k.group?.status && k.group.status !== "active")
+    return { usable: false, reason: "所属分组已下架" };
   if (k.expires_at && Date.parse(k.expires_at) <= Date.now())
     return { usable: false, reason: "已过期" };
   if (typeof k.quota === "number" && k.quota > 0 && (k.quota_used ?? 0) >= k.quota)
