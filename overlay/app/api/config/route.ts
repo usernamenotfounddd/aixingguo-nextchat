@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getServerSideConfig } from "../../config/server";
-import { TOKEN_COOKIE, resolveSession } from "../../utils/aixingguo";
+import { KEY_COOKIE, TOKEN_COOKIE, resolveSession } from "../../utils/aixingguo";
 
 const serverConfig = getServerSideConfig();
 
@@ -67,7 +67,10 @@ async function handle(req: NextRequest) {
   // 带面板会话时：按「这位用户自己的密钥所属分组」给出真正可用的模型清单
   try {
     const token = req.cookies.get(TOKEN_COOKIE)?.value;
-    const session = await resolveSession(token);
+    const session = await resolveSession(
+      token,
+      req.cookies.get(KEY_COOKIE)?.value,
+    );
     if (session && session.models.length > 0) {
       const models = session.models;
       const def = models.includes(PREFERRED_DEFAULT)

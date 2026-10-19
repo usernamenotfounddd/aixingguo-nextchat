@@ -1,34 +1,58 @@
 /**
- * AI 兴国（aixingguo.com）面板会话 → 用户自己的 API Key
+ * AI 兴国（aixingguo.com）面板会话 → 用户自己的 API Key（支持多 key 选择）
  *
- * 背景：sub2api 的「自定义菜单项」页面会把 user_id / token(=面板 JWT) 拼在 iframe URL 上
- * （frontend/src/utils/embedded-url.ts）。客户端脚本 aixingguo-session.js 把 token 存进
- * aixingguo_token cookie，本模块在【服务端】用这个 token 调面板的 /api/v1/keys，
- * 取到「这位用户自己的」sk- 密钥，供 /api/openai/* 转发使用，并按该密钥所属分组
- * 返回真正可用的模型列表。
- *
- * 设计约束：
- *  - 密钥只在服务端进程内短暂缓存（5 分钟），不回传浏览器；
- *  - 面板地址可用环境变量 AIXINGGUO_PANEL_URL 覆盖（默认 https://aixingguo.com）；
- *  - 只用 fetch，不碰 Node API → 可在 edge runtime 与 node runtime 复用。
+ * 数据流：
+ *  1. sub2api 的自定义菜单页把 `?user_id=&token=` 拼在 iframe URL 上
+ *  2. public/aixingguo-session.js 把 token 落成 aixingguo_token cookie
+ *  3. 本模块在【服务端】用 token 调面板 GET /api/v1/keys，拿到这位用户的全部密钥
+ *     （密钥明文只在这里持有，永不下发浏览器）
+ *  4. 用户在 /custom/chat 右下角的选择器里选一把 → 客户端写 aixingguo_key_id cookie
+ *     → 服务端按这个 id 选密钥；没选则回退到第一把可用密钥
+ *  5. /api/config 按「所选密钥所属分组」返回真正可用的模型清单
  */
-
 const PANEL_URL = (
   process.env.AIXINGGUO_PANEL_URL || "https://aixingguo.com"
 ).replace(/\/+$/, "");
 
 export const TOKEN_COOKIE = "aixingguo_token";
+export const KEY_COOKIE = "aixingguo_key_id";
+
+/** 面板密钥的「安全投影」：可下发浏览器（不含明文） */
+export type PanelKey = {
+  id: number;
+  name: string;
+  groupId?: number;
+  groupName?: string;
+  rateMultiplier?: number;
+  usable: boolean;
+  reason?: string;
+};
+
+type RawKey = {
+  id: number;
+  key: string;
+  name: string;
+  group_id?: number;
+  group?: { id?: number; name?: string; rate_multiplier?: number };
+  status?: string;
+  expires_at?: string | null;
+  quota?: number;
+  quota_used?: number;
+};
 
 export type PanelSession = {
   key: string;
   keyName: string;
+  keyId: number;
   groupId?: number;
   models: string[];
-  exp: number;
 };
 
-const cache = new Map<string, PanelSession>();
-const TTL_MS = 5 * 60 * 1000;
+const LIST_TTL = 60 * 1000;
+const MODELS_TTL = 5 * 60 * 1000;
+
+const listCache = new Map<string, { raw: RawKey[]; exp: number }>();
+const modelsCache = new Map<number, { models: string[]; exp: number }>();
 
 async function fetchJson(url: string, token: string): Promise<any | undefined> {
   try {
@@ -43,47 +67,78 @@ async function fetchJson(url: string, token: string): Promise<any | undefined> {
   }
 }
 
-function isUsable(k: any): boolean {
-  if (!k || typeof k.key !== "string" || !k.key) return false;
-  if (k.status && k.status !== "active") return false;
-  if (k.expires_at && Date.parse(k.expires_at) <= Date.now()) return false;
-  if (typeof k.quota === "number" && k.quota > 0 && (k.quota_used ?? 0) >= k.quota) {
-    return false;
-  }
-  return true;
-}
-
-/** 用面板 token 解析出该用户可用的密钥 + 该密钥所属分组的模型清单 */
-export async function resolveSession(
-  token: string | undefined | null,
-): Promise<PanelSession | undefined> {
-  if (!token) return undefined;
-  const hit = cache.get(token);
-  if (hit && hit.exp > Date.now()) return hit;
-
+async function rawKeys(token: string): Promise<RawKey[]> {
+  const hit = listCache.get(token);
+  if (hit && hit.exp > Date.now()) return hit.raw;
   const json = await fetchJson(
     `${PANEL_URL}/api/v1/keys?page=1&page_size=100&sort_by=created_at&sort_order=desc`,
     token,
   );
-  const items: any[] = json?.data?.items ?? [];
-  const usable = items.filter(isUsable);
+  const raw: RawKey[] = (json?.data?.items ?? []).filter(
+    (k: any) => k && typeof k.key === "string" && k.key,
+  );
+  listCache.set(token, { raw, exp: Date.now() + LIST_TTL });
+  return raw;
+}
+
+function usability(k: RawKey): { usable: boolean; reason?: string } {
+  if (k.status && k.status !== "active") return { usable: false, reason: "已禁用" };
+  if (k.expires_at && Date.parse(k.expires_at) <= Date.now())
+    return { usable: false, reason: "已过期" };
+  if (typeof k.quota === "number" && k.quota > 0 && (k.quota_used ?? 0) >= k.quota)
+    return { usable: false, reason: "额度已用完" };
+  return { usable: true };
+}
+
+/** 可下发浏览器的密钥清单（不带明文） */
+export async function listKeys(
+  token: string | undefined | null,
+): Promise<PanelKey[]> {
+  if (!token) return [];
+  const raw = await rawKeys(token);
+  return raw.map((k) => {
+    const u = usability(k);
+    return {
+      id: k.id,
+      name: k.name || `密钥 ${k.id}`,
+      groupId: k.group_id ?? k.group?.id,
+      groupName: k.group?.name,
+      rateMultiplier: k.group?.rate_multiplier,
+      usable: u.usable,
+      reason: u.reason,
+    };
+  });
+}
+
+async function modelsForKey(key: string, keyId: number): Promise<string[]> {
+  const hit = modelsCache.get(keyId);
+  if (hit && hit.exp > Date.now()) return hit.models;
+  const m = await fetchJson(`${PANEL_URL}/v1/models`, key);
+  const models: string[] = (m?.data ?? []).map((x: any) => x?.id).filter(Boolean);
+  modelsCache.set(keyId, { models, exp: Date.now() + MODELS_TTL });
+  return models;
+}
+
+/** 解析出「这次请求该用哪把密钥」 */
+export async function resolveSession(
+  token: string | undefined | null,
+  keyIdCookie?: string | undefined | null,
+): Promise<PanelSession | undefined> {
+  if (!token) return undefined;
+  const raw = await rawKeys(token);
+  if (!raw.length) return undefined;
+  const usable = raw.filter((k) => usability(k).usable);
   if (!usable.length) return undefined;
 
-  const chosen = usable[0];
+  const wanted =
+    keyIdCookie && /^\d+$/.test(keyIdCookie) ? Number(keyIdCookie) : undefined;
+  const chosen = (wanted && usable.find((k) => k.id === wanted)) || usable[0];
 
-  let models: string[] = [];
-  const m = await fetchJson(`${PANEL_URL}/v1/models`, chosen.key);
-  if (m?.data) {
-    models = (m.data as any[]).map((x) => x?.id).filter(Boolean);
-  }
-
-  const session: PanelSession = {
+  return {
     key: chosen.key,
-    keyName: chosen.name ?? "",
-    groupId: chosen.group_id,
-    models,
-    exp: Date.now() + TTL_MS,
+    keyName: chosen.name || `密钥 ${chosen.id}`,
+    keyId: chosen.id,
+    groupId: chosen.group_id ?? chosen.group?.id,
+    models: await modelsForKey(chosen.key, chosen.id),
   };
-  cache.set(token, session);
-  return session;
 }

@@ -50,6 +50,8 @@ export default function RootLayout({
         <script src="/serviceWorkerRegister.js" defer></script>
         {/* AI 兴国：把面板 iframe 带来的 ?token= 变成会话 cookie */}
         <script src="/aixingguo-session.js" defer></script>
+        {/* AI 兴国：多密钥选择器（右下角） */}
+        <script src="/aixingguo-keypicker.js" defer></script>
       </head>
       <body>
         {children}

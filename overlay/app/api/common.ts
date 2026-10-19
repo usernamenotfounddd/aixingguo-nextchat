@@ -3,7 +3,7 @@ import { getServerSideConfig } from "../config/server";
 import { OPENAI_BASE_URL, ServiceProvider } from "../constant";
 import { cloudflareAIGatewayUrl } from "../utils/cloudflare";
 import { getModelProvider, isModelNotavailableInServer } from "../utils/model";
-import { TOKEN_COOKIE, resolveSession } from "../utils/aixingguo";
+import { KEY_COOKIE, TOKEN_COOKIE, resolveSession } from "../utils/aixingguo";
 
 const serverConfig = getServerSideConfig();
 
@@ -33,6 +33,7 @@ export async function requestOpenai(req: NextRequest) {
     if (!authValue.trim() || /^bearer\s*$/i.test(authValue.trim())) {
       const session = await resolveSession(
         req.cookies.get(TOKEN_COOKIE)?.value,
+        req.cookies.get(KEY_COOKIE)?.value,
       );
       if (session) {
         authValue = `Bearer ${session.key}`;

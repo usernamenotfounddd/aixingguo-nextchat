@@ -21,8 +21,10 @@ sub2api 的「自定义菜单项」页面会把面板身份拼在 iframe URL 上
 | 文件 | 作用 |
 |---|---|
 | `public/aixingguo-session.js`（新增） | 把 iframe URL 上的 `token` 落成 `aixingguo_token` cookie，并从地址栏抹掉 |
+| `public/aixingguo-keypicker.js`（新增） | 右下角「密钥」选择器：列出**这位用户自己**的密钥（名称/分组/可用状态），选中的 id 写进 `aixingguo_key_id` cookie 后重载 |
+| `app/api/aixingguo/keys/route.ts`（新增） | 给选择器用的密钥清单接口（只回 id/名称/分组/状态，**永不回明文**） |
 | `app/utils/aixingguo.ts`（新增） | 服务端用该 token 调面板 `GET /api/v1/keys` 选出可用密钥，再调 `GET /v1/models` 取该密钥所属分组的模型；进程内缓存 5 分钟 |
-| `app/api/common.ts` | `/api/openai/*` 转发时：客户端没带 key 而请求带会话 cookie → 用「用户自己的 key」转发（用户自己填了 key 则仍然优先用他的） |
+| `app/api/common.ts` | `/api/openai/*` 转发时：客户端没带 key 而请求带会话 cookie → 用「用户选中的那把 key」转发（未选则取第一把可用；用户自己填了 key 则仍优先） |
 | `app/api/config/route.ts` | `/api/config` 按会话返回**该用户分组的模型清单**（并隐藏密钥输入框） |
 | `app/layout.tsx` | 引入 `aixingguo-session.js` |
 
@@ -38,7 +40,7 @@ sub2api 的「自定义菜单项」页面会把面板身份拼在 iframe URL 上
 
 | 场景 | 结果 |
 |---|---|
-| 从 `/custom/chat` 打开（URL 带 token） | 用**该用户自己的** key，模型清单 = 其分组可用模型，无密钥输入框 |
+| 从 `/custom/chat` 打开（URL 带 token） | 用**该用户自己的** key；右下角可切换用哪一把；模型清单 = 所选密钥所属分组，无密钥输入框 |
 | 直接打开 `chat.aixingguo.com`（无 token，浏览器里有自己的 key） | 照上游行为：用浏览器里那把 key |
 | 直接打开且没有任何 key | 401 `API_KEY_REQUIRED`（不会偷偷用站长的 key） |
 | 用户 token 过期 / 没有可用密钥 | 退回兜底配置，用户可自行填 key |
